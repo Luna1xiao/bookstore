@@ -1,76 +1,134 @@
-import sqlite3 as sqlite
+import logging
+import json
 from be.model import error
-from be.model import db_conn
+from be.model import store
+import sys
+sys.path.append("D:\\anaconda3\\envs\\env_2023_aut\\lib\\site-packages")
+from pymongo import MongoClient
 
-
-class Seller(db_conn.DBConn):
+class Seller:
     def __init__(self):
-        db_conn.DBConn.__init__(self)
+        self.db = store.get_db_conn()
 
-    def add_book(
-        self,
-        user_id: str,
-        store_id: str,
-        book_id: str,
-        book_json_str: str,
-        stock_level: int,
-    ):
+    def add_book(self,user_id: str,store_id: str,book_id: str,book_json_str: str,stock_level: int, )-> (str, str, str, str, int):
         try:
-            if not self.user_id_exist(user_id):
+            user_collection = self.db['user']
+            store_collection = self.db['store']
+
+            if not user_collection.find_one({'user_id': user_id}):
                 return error.error_non_exist_user_id(user_id)
-            if not self.store_id_exist(store_id):
+            if not store_collection.find_one({'store_id': store_id}):
                 return error.error_non_exist_store_id(store_id)
-            if self.book_id_exist(store_id, book_id):
+            if store_collection.find_one({'store_id': store_id, 'book.book_id': book_id}):
                 return error.error_exist_book_id(book_id)
 
-            self.conn.execute(
-                "INSERT into store(store_id, book_id, book_info, stock_level)"
-                "VALUES (?, ?, ?, ?)",
-                (store_id, book_id, book_json_str, stock_level),
-            )
-            self.conn.commit()
-        except sqlite.Error as e:
-            return 528, "{}".format(str(e))
-        except BaseException as e:
-            return 530, "{}".format(str(e))
+            book_info = json.loads(book_json_str)
+            book_info['book_id'] = book_id
+
+            store_info = {
+                'store_id': store_id,
+                'book': [
+                    {
+                        'book_id': book_id,
+                        'book_info': book_info,
+                        'stock_level': stock_level,
+                    }
+                ],
+                'user_id': user_id,
+            }
+            store_collection.insert_one(store_info)
+        except Exception as e:
+            logging.info("Error: {}".format(str(e)))
+            return 500, "Internal Server Error"
         return 200, "ok"
 
     def add_stock_level(
         self, user_id: str, store_id: str, book_id: str, add_stock_level: int
     ):
         try:
-            if not self.user_id_exist(user_id):
+            user_collection = self.db['user']
+            store_collection = self.db['store']
+
+            # 检查用户是否存在
+            if not user_collection.find_one({'user_id': user_id}):
                 return error.error_non_exist_user_id(user_id)
-            if not self.store_id_exist(store_id):
+            
+            # 检查店铺是否存在
+            if not store_collection.find_one({'store_id': store_id}):
                 return error.error_non_exist_store_id(store_id)
-            if not self.book_id_exist(store_id, book_id):
+
+            # 查找特定书籍
+            store_info = store_collection.find_one(
+                {'store_id': store_id, 'book.book_id': book_id}
+            )
+            if not store_info:
                 return error.error_non_exist_book_id(book_id)
 
-            self.conn.execute(
-                "UPDATE store SET stock_level = stock_level + ? "
-                "WHERE store_id = ? AND book_id = ?",
-                (add_stock_level, store_id, book_id),
-            )
-            self.conn.commit()
-        except sqlite.Error as e:
-            return 528, "{}".format(str(e))
-        except BaseException as e:
-            return 530, "{}".format(str(e))
+            # 获取书籍信息列表
+            books = store_info.get('book')
+
+            # 找到特定书籍
+            for book in books:
+                if book.get('book_id') == book_id:
+                    stock_level = book.get('stock_level')
+                    new_stock_level = stock_level + add_stock_level
+
+                    # 更新库存
+                    store_collection.update_one(
+                        {
+                            'store_id': store_id,
+                            'book.book_id': book_id
+                        },
+                        {
+                            '$set': {'book.$.stock_level': new_stock_level}
+                        }
+                    )
+
+        except Exception as e:
+            logging.info("Error: {}".format(str(e)))
+            return 500, "Internal Server Error"
+
         return 200, "ok"
 
+    # 添加了店铺的balance
     def create_store(self, user_id: str, store_id: str) -> (int, str):
         try:
-            if not self.user_id_exist(user_id):
+            user_collection = self.db['user']
+            user_store_collection = self.db['store']
+
+            if not user_collection.find_one({'user_id': user_id}):
                 return error.error_non_exist_user_id(user_id)
-            if self.store_id_exist(store_id):
+            if user_store_collection.find_one({'store_id': store_id}):
                 return error.error_exist_store_id(store_id)
-            self.conn.execute(
-                "INSERT into user_store(store_id, user_id)" "VALUES (?, ?)",
-                (store_id, user_id),
-            )
-            self.conn.commit()
-        except sqlite.Error as e:
-            return 528, "{}".format(str(e))
-        except BaseException as e:
-            return 530, "{}".format(str(e))
+
+            user_store_info = {
+                'store_id': store_id,
+                'user_id': user_id
+            }
+            self.db['store'].insert_one(user_store_info)
+
+        except Exception as e:
+            logging.info("Error: {}".format(str(e)))
+            return 500, "Internal Server Error"
+
+        return 200, "ok"
+    
+    # 发货
+    def send_books(self, store_id: str, order_id: str) -> (int, str):
+        try:
+            if not self.db['store'].find_one({'store_id': store_id}):
+                return error.error_non_exist_store_id(store_id)
+            if not self.db['history_order'].find_one({'order_id': order_id}):
+                return error.error_invalid_order_id(order_id)
+            
+            order = self.db['history_order'].find_one({'order_id': order_id})
+            if order["status"] != 2:
+                return 500, "Invalid order status"
+            
+            self.db["history_order"].upadte_one({"order_id": order_id}, {"$set": {"status": 3}})
+
+        except Exception as e:
+            logging.info("Error: {}".format(str(e)))
+            return 500, "Internal Server Error"
+
         return 200, "ok"
