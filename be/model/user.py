@@ -1,7 +1,6 @@
 import jwt
 import time
 import logging
-import sqlite3 as sqlite
 from be.model import error
 from be.model import db_conn
 
@@ -55,39 +54,40 @@ class User(db_conn.DBConn):
 
     def register(self, user_id: str, password: str):
         try:
+            existing_user = self.db['user'].find_one({"user_id": user_id})
+            if existing_user:
+                return error.error_exist_user_id(user_id)
+
             terminal = "terminal_{}".format(str(time.time()))
             token = jwt_encode(user_id, terminal)
-            self.conn.execute(
-                "INSERT into user(user_id, password, balance, token, terminal) "
-                "VALUES (?, ?, ?, ?, ?);",
-                (user_id, password, 0, token, terminal),
-            )
-            self.conn.commit()
-        except sqlite.Error:
-            return error.error_exist_user_id(user_id)
+            user_data = {
+                "user_id": user_id,
+                "password": password,
+                "balance": 0,
+                "token": token,
+                "terminal": terminal
+            }
+            self.db['user'].insert_one(user_data)  # 插入用户数据到 'user' 集合
+        except Exception as e:
+            return 500, "Registration failed: {}".format(str(e))
         return 200, "ok"
 
     def check_token(self, user_id: str, token: str) -> (int, str):
-        cursor = self.conn.execute("SELECT token from user where user_id=?", (user_id,))
-        row = cursor.fetchone()
-        if row is None:
-            return error.error_authorization_fail()
-        db_token = row[0]
+        user_data = self.db['user'].find_one({"user_id": user_id})
+        if user_data is None:
+            return 401, "Authorization failed: User not found"
+        db_token = user_data.get("token")
         if not self.__check_token(user_id, db_token, token):
-            return error.error_authorization_fail()
+            return 401, "Authorization failed: Invalid token"
         return 200, "ok"
 
     def check_password(self, user_id: str, password: str) -> (int, str):
-        cursor = self.conn.execute(
-            "SELECT password from user where user_id=?", (user_id,)
-        )
-        row = cursor.fetchone()
-        if row is None:
-            return error.error_authorization_fail()
-
-        if password != row[0]:
-            return error.error_authorization_fail()
-
+        user_data = self.db['user'].find_one({"user_id": user_id})
+        if user_data is None:
+            return 401, "Authorization failed: User not found"
+        db_password = user_data.get("password")
+        if password != db_password:
+            return 401, "Authorization failed: Invalid password"
         return 200, "ok"
 
     def login(self, user_id: str, password: str, terminal: str) -> (int, str, str):
@@ -98,17 +98,14 @@ class User(db_conn.DBConn):
                 return code, message, ""
 
             token = jwt_encode(user_id, terminal)
-            cursor = self.conn.execute(
-                "UPDATE user set token= ? , terminal = ? where user_id = ?",
-                (token, terminal, user_id),
+            result = self.db['user'].update_one(
+                {"user_id": user_id},
+                {"$set": {"token": token, "terminal": terminal}}
             )
-            if cursor.rowcount == 0:
-                return error.error_authorization_fail() + ("",)
-            self.conn.commit()
-        except sqlite.Error as e:
-            return 528, "{}".format(str(e)), ""
-        except BaseException as e:
-            return 530, "{}".format(str(e)), ""
+            if result.modified_count == 0:
+                return 401, "Authorization failed: Unable to update token", ""
+        except Exception as e:
+            return 500, "Login failed: {}".format(str(e)), ""
         return 200, "ok", token
 
     def logout(self, user_id: str, token: str) -> bool:
@@ -120,18 +117,15 @@ class User(db_conn.DBConn):
             terminal = "terminal_{}".format(str(time.time()))
             dummy_token = jwt_encode(user_id, terminal)
 
-            cursor = self.conn.execute(
-                "UPDATE user SET token = ?, terminal = ? WHERE user_id=?",
-                (dummy_token, terminal, user_id),
+            result = self.db['user'].update_one(
+                {"user_id": user_id},
+                {"$set": {"token": dummy_token, "terminal": terminal}}
             )
-            if cursor.rowcount == 0:
-                return error.error_authorization_fail()
+            if result.modified_count == 0:
+                return 401, "Authorization failed: Unable to update token"
 
-            self.conn.commit()
-        except sqlite.Error as e:
-            return 528, "{}".format(str(e))
-        except BaseException as e:
-            return 530, "{}".format(str(e))
+        except Exception as e:
+            return 500, "Logout failed: {}".format(str(e))
         return 200, "ok"
 
     def unregister(self, user_id: str, password: str) -> (int, str):
@@ -140,19 +134,17 @@ class User(db_conn.DBConn):
             if code != 200:
                 return code, message
 
-            cursor = self.conn.execute("DELETE from user where user_id=?", (user_id,))
-            if cursor.rowcount == 1:
-                self.conn.commit()
+            result = self.db['user'].delete_one({"user_id": user_id})
+
+            if result.deleted_count == 1:
+                return 200, "OK"
             else:
-                return error.error_authorization_fail()
-        except sqlite.Error as e:
-            return 528, "{}".format(str(e))
-        except BaseException as e:
-            return 530, "{}".format(str(e))
-        return 200, "ok"
+                return 401, "Authorization failed: User not found"
+        except Exception as e:
+            return 500, "Unregister failed: {}".format(str(e))
 
     def change_password(
-        self, user_id: str, old_password: str, new_password: str
+            self, user_id: str, old_password: str, new_password: str
     ) -> bool:
         try:
             code, message = self.check_password(user_id, old_password)
@@ -161,16 +153,14 @@ class User(db_conn.DBConn):
 
             terminal = "terminal_{}".format(str(time.time()))
             token = jwt_encode(user_id, terminal)
-            cursor = self.conn.execute(
-                "UPDATE user set password = ?, token= ? , terminal = ? where user_id = ?",
-                (new_password, token, terminal, user_id),
-            )
-            if cursor.rowcount == 0:
-                return error.error_authorization_fail()
 
-            self.conn.commit()
-        except sqlite.Error as e:
-            return 528, "{}".format(str(e))
-        except BaseException as e:
-            return 530, "{}".format(str(e))
+            result = self.db['user'].update_one(
+                {"user_id": user_id},
+                {"$set": {"password": new_password, "token": token, "terminal": terminal}}
+            )
+
+            if result.modified_count == 0:
+                return 401, "Authorization failed: Unable to change password"
+        except Exception as e:
+            return 500, "Change password failed: {}".format(str(e))
         return 200, "ok"

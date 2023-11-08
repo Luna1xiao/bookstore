@@ -48,3 +48,17 @@ class Buyer:
         headers = {"token": self.token}
         r = requests.post(url, headers=headers, json=json)
         return r.status_code
+    
+    # 收货
+    def receive_books(
+        self,user_id:str, password:str, order_id:str
+        ) -> int:
+        json={
+            "user_id": user_id, 
+            "password": password,
+            "order_id": order_id
+        }
+        url = urljoin(self.url_prefix, "receive_books")
+        headers = {"token": self.token}
+        r = requests.post(url, headers=headers, json=json)
+        return r.status_code
