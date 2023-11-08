@@ -41,6 +41,22 @@ def add_funds():
     code, message = b.add_funds(user_id, password, add_value)
     return jsonify({"message": message}), code
 
+@bp_buyer.route("/cancel", methods=["POST"])
+def cancel():
+    user_id: str = request.json.get("user_id")
+    order_id: str = request.json.get("order_id")
+    b = Buyer()
+    code, message = b.cancel(user_id,order_id)
+    return jsonify({"message": message}), code
+
+@bp_buyer.route("/history_order", methods=["POST"])
+def search_history_orders():
+    #user_id = request.json.get("user_id", "")
+    user_id: str = request.json.get("user_id")
+    u = Buyer()
+    code, message, result = u.search_history_order(user_id=user_id)
+    return jsonify({"message": message, "result": result}), code
+
 
 # 收货
 @bp_buyer.route("/receive_books", methods=["POST"])
@@ -50,5 +66,5 @@ def receive_books():
     password = request.json.get("password")
     b = Buyer()
     code, message = b.receive_books(user_id, password, order_id)
-    
+
     return jsonify({"message": message}), code
