@@ -2,6 +2,7 @@ from flask import Blueprint
 from flask import request
 from flask import jsonify
 from be.model import search
+//haha
 
 bp_search = Blueprint("search", __name__, url_prefix="/search")
 
